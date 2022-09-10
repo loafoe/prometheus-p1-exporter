@@ -115,6 +115,10 @@ func main() {
 					actualElectricityDeliveredMetric.Set(floatValue(obj.Values[0].Value))
 				case gop1.OBISTypeElectricityGenerated:
 					actualElectricityGeneratedMetric.Set(floatValue(obj.Values[0].Value))
+				case gop1.OBISTypeNumberOfPowerFailures:
+					powerFailuresShortMetric.Set(floatValue(obj.Values[0].Value))
+				case gop1.OBISTypeNumberOfLongPowerFailures:
+					powerFailuresLongMetric.Set(floatValue(obj.Values[0].Value))
 				}
 			}
 		}
