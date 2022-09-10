@@ -103,7 +103,14 @@ func main() {
 		for tgram := range p1.Incoming {
 			for _, obj := range tgram.Objects {
 				switch obj.Type {
-
+				case gop1.OBISTypeElectricityDeliveredTariff1:
+					electricityUsageLowMetric.Set(floatValue(obj.Values[0].Value))
+				case gop1.OBISTypeElectricityDeliveredTariff2:
+					electricityUsageHighMetric.Set(floatValue(obj.Values[0].Value))
+				case gop1.OBISTypeElectricityGeneratedTariff1:
+					electricityReturnedLowMetric.Set(floatValue(obj.Values[0].Value))
+				case gop1.OBISTypeElectricityGeneratedTariff2:
+					electricityReturnedHighMetric.Set(floatValue(obj.Values[0].Value))
 				case gop1.OBISTypeElectricityDelivered:
 					actualElectricityDeliveredMetric.Set(floatValue(obj.Values[0].Value))
 				case gop1.OBISTypeElectricityGenerated:
