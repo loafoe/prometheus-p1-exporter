@@ -57,9 +57,31 @@ p1_usage_gas 0
 
 ## Development
 
-Currently only the ESMR 5.0 format is supported and the parser is default configured to parse the telegram message with the keys the Sagemcom XS210 is using.
-If you have to support a different ESMR 5.0 message, feel free to create your own implementation of the TelegramFormat struct. To support a different format then ESMR 5.0 you can implement your own implementation of the TelegramReaderOptions struct.
+You can add additional `OBISType` metrics and case statements as you see fit
+
+## Grafana Agent
+
+On my Rasbperry PI I'm running a copy of [Grafana Agent](https://grafana.com/docs/grafana-cloud/data-configuration/agent/) which ships the metrics to a cloud based Prometheus instance. Example config below:
+
+```yaml
+metrics:
+  global:
+    scrape_interval: 2s
+    external_labels:
+      environment: p1-server
+  configs:
+    - name: default
+      scrape_configs:
+        - job_name: 'p1_exporter'
+          static_configs:
+            - targets: ['localhost:8888']
+      remote_write:
+        - url: https://prometheus.example.com/api/v1/write
+          basic_auth:
+            username: scraper
+            password: S0m3pAssW0rdH3Re
+```
 
 ## Acknowledgement
 
-This was forked from https://github.com/jordyv/prometheus-p1-exporter
+This was forked from https://github.com/jordyv/prometheus-p1-exporter and modified for continous read outs from the P1 port
