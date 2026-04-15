@@ -1,5 +1,3 @@
-/.vscode
-/.idea
-/dist
-/vendor
-/cover.out
+exporter.log
+homewizard_token.txt
+prometheus-p1-exporter

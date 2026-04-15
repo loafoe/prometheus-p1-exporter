@@ -1,20 +1,30 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
-	"github.com/skoef/gop1"
 )
 
 var listenAddr string
 var verbose bool
 var metricNamePrefix = "p1_"
+
+var sourceName string
+var usbDevice string
+var homewizardURL string
+var homewizardToken string
+var homewizardTokenFile string
+var homewizardInterval time.Duration
 
 var (
 	registry                   = prometheus.NewRegistry()
@@ -58,6 +68,42 @@ var (
 		Name: metricNamePrefix + "usage_gas",
 		Help: "Gas usage",
 	})
+	activePowerL1Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_power_l1_w",
+		Help: "Active power L1",
+	})
+	activePowerL2Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_power_l2_w",
+		Help: "Active power L2",
+	})
+	activePowerL3Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_power_l3_w",
+		Help: "Active power L3",
+	})
+	activeVoltageL1Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_voltage_l1_v",
+		Help: "Active voltage L1",
+	})
+	activeVoltageL2Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_voltage_l2_v",
+		Help: "Active voltage L2",
+	})
+	activeVoltageL3Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_voltage_l3_v",
+		Help: "Active voltage L3",
+	})
+	activeCurrentL1Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_current_l1_a",
+		Help: "Active current L1",
+	})
+	activeCurrentL2Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_current_l2_a",
+		Help: "Active current L2",
+	})
+	activeCurrentL3Metric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: metricNamePrefix + "active_current_l3_a",
+		Help: "Active current L3",
+	})
 )
 
 func init() {
@@ -71,6 +117,15 @@ func init() {
 	registry.MustRegister(powerFailuresLongMetric)
 	registry.MustRegister(powerFailuresShortMetric)
 	registry.MustRegister(gasUsageMetric)
+	registry.MustRegister(activePowerL1Metric)
+	registry.MustRegister(activePowerL2Metric)
+	registry.MustRegister(activePowerL3Metric)
+	registry.MustRegister(activeVoltageL1Metric)
+	registry.MustRegister(activeVoltageL2Metric)
+	registry.MustRegister(activeVoltageL3Metric)
+	registry.MustRegister(activeCurrentL1Metric)
+	registry.MustRegister(activeCurrentL2Metric)
+	registry.MustRegister(activeCurrentL3Metric)
 }
 
 func floatValue(input string) (fval float64) {
@@ -81,54 +136,81 @@ func floatValue(input string) (fval float64) {
 func main() {
 	flag.StringVar(&listenAddr, "listen", "127.0.0.1:8888", "Listen address for HTTP metrics")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose output logging")
+	flag.StringVar(&sourceName, "source", "serial", "Source of data: 'serial' (P1 USB) or 'homewizard' (Homewizard P1 meter API)")
+	flag.StringVar(&usbDevice, "usb-device", "/dev/ttyUSB0", "USB device for serial source")
+	flag.StringVar(&homewizardURL, "homewizard-url", "", "Base URL for Homewizard API (e.g. https://192.168.1.100)")
+	flag.StringVar(&homewizardToken, "homewizard-token", "", "Token for Homewizard API (v2)")
+	flag.StringVar(&homewizardTokenFile, "homewizard-token-file", "homewizard_token.txt", "File to store/read the Homewizard token")
+	flag.DurationVar(&homewizardInterval, "homewizard-interval", 5*time.Second, "Interval for Homewizard API polling")
 	flag.Parse()
-
-	p1, err := gop1.New(gop1.P1Config{
-		USBDevice: "/dev/ttyUSB0",
-	})
-	if err != nil {
-		logrus.Errorln("Quitting because of error opening p1", err)
-		os.Exit(1)
-	}
-
-	// Start
-	p1.Start()
 
 	logrus.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 	if verbose {
 		logrus.SetLevel(logrus.DebugLevel)
 	}
 
+	var source Source
+	switch sourceName {
+	case "serial":
+		source = &SerialSource{USBDevice: usbDevice}
+	case "homewizard":
+		if homewizardURL == "" {
+			logrus.Fatalln("homewizard-url is required when source is 'homewizard'")
+		}
+		source = &HomewizardSource{
+			URL:       homewizardURL,
+			Interval:  homewizardInterval,
+			Token:     homewizardToken,
+			TokenFile: homewizardTokenFile,
+		}
+	default:
+		logrus.Fatalf("Unknown source: %s", sourceName)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	readings, err := source.Start(ctx)
+	if err != nil {
+		logrus.Fatalf("Failed to start source: %v", err)
+	}
+
 	go func() {
-		for tgram := range p1.Incoming {
-			for _, obj := range tgram.Objects {
-				switch obj.Type {
-				case gop1.OBISTypeElectricityDeliveredTariff1:
-					electricityUsageLowMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeElectricityDeliveredTariff2:
-					electricityUsageHighMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeElectricityGeneratedTariff1:
-					electricityReturnedLowMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeElectricityGeneratedTariff2:
-					electricityReturnedHighMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeElectricityDelivered:
-					actualElectricityDeliveredMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeElectricityGenerated:
-					actualElectricityGeneratedMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeNumberOfPowerFailures:
-					powerFailuresShortMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeNumberOfLongPowerFailures:
-					powerFailuresLongMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeElectricityTariffIndicator:
-					activeTarrifMetric.Set(floatValue(obj.Values[0].Value))
-				case gop1.OBISTypeGasDelivered:
-					gasUsageMetric.Set(floatValue(obj.Values[0].Value))
-				}
-			}
+		for reading := range readings {
+			updateMetrics(reading)
 		}
 	}()
 
 	logrus.Infoln("Start listening at", listenAddr)
 	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	logrus.Fatalln(http.ListenAndServe(listenAddr, nil))
+}
+
+func updateMetrics(r Reading) {
+	setIfNotNull(electricityUsageLowMetric, r.ElectricityUsageLow)
+	setIfNotNull(electricityUsageHighMetric, r.ElectricityUsageHigh)
+	setIfNotNull(electricityReturnedLowMetric, r.ElectricityReturnedLow)
+	setIfNotNull(electricityReturnedHighMetric, r.ElectricityReturnedHigh)
+	setIfNotNull(actualElectricityDeliveredMetric, r.ActualElectricityDelivered)
+	setIfNotNull(actualElectricityGeneratedMetric, r.ActualElectricityGenerated)
+	setIfNotNull(powerFailuresShortMetric, r.PowerFailuresShort)
+	setIfNotNull(powerFailuresLongMetric, r.PowerFailuresLong)
+	setIfNotNull(activeTarrifMetric, r.ActiveTariff)
+	setIfNotNull(gasUsageMetric, r.GasUsage)
+
+	setIfNotNull(activePowerL1Metric, r.ActivePowerL1W)
+	setIfNotNull(activePowerL2Metric, r.ActivePowerL2W)
+	setIfNotNull(activePowerL3Metric, r.ActivePowerL3W)
+	setIfNotNull(activeVoltageL1Metric, r.ActiveVoltageL1V)
+	setIfNotNull(activeVoltageL2Metric, r.ActiveVoltageL2V)
+	setIfNotNull(activeVoltageL3Metric, r.ActiveVoltageL3V)
+	setIfNotNull(activeCurrentL1Metric, r.ActiveCurrentL1A)
+	setIfNotNull(activeCurrentL2Metric, r.ActiveCurrentL2A)
+	setIfNotNull(activeCurrentL3Metric, r.ActiveCurrentL3A)
+}
+
+func setIfNotNull(metric prometheus.Gauge, val *float64) {
+	if val != nil {
+		metric.Set(*val)
+	}
 }
