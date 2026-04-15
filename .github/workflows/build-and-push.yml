@@ -1,0 +1,57 @@
+name: Build and Push OCI Images
+
+on:
+  push:
+    branches: [ 'main' ]
+    tags: [ 'v*' ]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write # needed for signing
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Install ko
+        uses: ko-build/setup-ko@v0.6
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push
+        id: ko_build
+        run: |
+          # Determine the tag
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            TAG=${GITHUB_REF#refs/tags/}
+          else
+            TAG=latest
+          fi
+          
+          # Build and push using ko
+          # We use --platform to specify the architectures
+          # We use --bare to avoid the default package name being appended twice if the user provides the full image name
+          echo "image=$(KO_DOCKER_REPO=ghcr.io/${{ github.repository }} ko build --bare --platform=linux/amd64,linux/arm64 --tags=${TAG} .)" >> $GITHUB_OUTPUT
+
+      - name: Sign the images
+        run: |
+          # The output of ko build is the image digest, which we use to sign
+          cosign sign --yes ${{ steps.ko_build.outputs.image }}
