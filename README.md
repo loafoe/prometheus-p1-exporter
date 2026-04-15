@@ -10,6 +10,25 @@ With Go install:
 go install github.com/loafoe/prometheus-p1-exporter@latest
 ```
 
+## Container Image
+
+OCI images are available via **GitHub Container Registry (GHCR)**. They are multi-arch (linux/amd64, linux/arm64) and signed with `cosign`.
+
+```shell
+docker pull ghcr.io/loafoe/prometheus-p1-exporter:latest
+```
+
+Example usage with Docker:
+
+```shell
+docker run -d \
+  --name p1-exporter \
+  -p 8888:8888 \
+  ghcr.io/loafoe/prometheus-p1-exporter:latest \
+  -source=homewizard \
+  -homewizard-url=https://192.168.1.100
+```
+
 ## Usage
 
 ```
